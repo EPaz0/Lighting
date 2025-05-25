@@ -16,8 +16,12 @@ var VSHADER_SOURCE = `
   precision mediump float;
   attribute vec4 a_Position; 
   attribute vec2 a_UV;
+  attribute vec3 a_Normal;
   varying vec2 v_UV;
+  varying vec3 v_Normal;
+  varying vec4 v_VertPos;
   uniform mat4  u_ModelMatrix;
+  uniform mat4 u_NormalMatrix; // Normal matrix for transforming normals
   uniform mat4 u_GlobalRotateMatrix;
   uniform mat4 u_ViewMatrix;
   uniform mat4 u_ProjectionMatrix;
@@ -26,6 +30,9 @@ var VSHADER_SOURCE = `
 
   gl_Position = u_ProjectionMatrix * u_ViewMatrix * u_GlobalRotateMatrix * u_ModelMatrix * a_Position;
   v_UV = a_UV;
+  v_Normal = a_Normal;
+  //v_Normal = normalize(vec3(u_NormalMatrix * vec4(a_Normal, 1)));
+  v_VertPos = u_ModelMatrix * a_Position; // Pass the vertex position to the fragment shader
   }`
 //  
 //uniform mat4 u_ViewMatrix;
@@ -33,15 +40,22 @@ var VSHADER_SOURCE = `
 var FSHADER_SOURCE =`
   precision mediump float;
   varying vec2 v_UV;
+  varying vec3 v_Normal;
   uniform vec4 u_FragColor;
   uniform sampler2D u_Sampler0;
   uniform sampler2D u_Sampler1;
   uniform sampler2D u_Sampler2;
   uniform sampler2D u_Sampler3;
   uniform int u_whichTexture;
+  uniform vec3 u_lightPos; // Light position
+  varying vec4 v_VertPos; // Vertex position in world coordinates
+  uniform vec3 u_cameraPos; // Camera position
+  uniform bool u_lightOn; // Light on/off switch
 
   void main() {
-      if(u_whichTexture == -2){
+      if(u_whichTexture == -3){
+        gl_FragColor = vec4((v_Normal + 1.0)/2.0,1.0); // Use Normal Debug Color
+      }else if(u_whichTexture == -2){
         gl_FragColor = u_FragColor;               //Use Color 
       
       } else if(u_whichTexture == -1){
@@ -61,7 +75,45 @@ var FSHADER_SOURCE =`
       
         gl_FragColor = vec4(1,.2,.2,1);             // Error put redish
       }
-  
+
+      vec3 lightVector = u_lightPos - vec3(v_VertPos); // Vector from light to vertex
+      float r = length(lightVector); // Distance from light to vertex
+
+      // if(r < 1.0){
+      //   gl_FragColor = vec4(1,0,0,1); // If the distance is negative, set color to black
+      // }else if(r < 2.0){
+      //   gl_FragColor = vec4(0,1,0,1); // If the distance is negative, set color to black
+      // }
+    // gl_FragColor = vec4(vec3(gl_FragColor)/(r*r), 1); // Apply lighting effect
+    
+    //N dot L
+    vec3 L = normalize(lightVector); // Normalize the light vector
+    vec3 N = normalize(v_Normal); // Normalize the normal vector
+    float nDotL = max(dot(N, L), 0.0); // Calculate the dot product between normal and light vector
+    
+    
+
+    //reflection
+    vec3 R = reflect(-L, N); // Calculate the reflection vector
+
+    //eye
+    vec3 E = normalize(u_cameraPos-vec3(v_VertPos)); // Calculate the eye vector
+
+    //Specular
+    float specular = pow(max(dot(E, R), 0.0), 10.0); // Calculate the specular component
+
+
+    vec3 diffuse = vec3(gl_FragColor) * nDotL * 0.7; // Get the diffuse color from the fragment color
+    vec3 ambient = vec3(gl_FragColor)* 0.3;
+    if(u_lightOn)
+    {
+      if(u_whichTexture == 0){
+        gl_FragColor = vec4(specular + diffuse + ambient, 1.0); // Use Texture 0
+      }else{
+        gl_FragColor = vec4(diffuse + ambient, 1.0); // Combine diffuse and ambient light
+      }
+    }
+   // gl_FragColor = vec4(specular + diffuse + ambient, 1.0); // Combine diffuse and ambient light
   }`
 
   //Global variables
@@ -80,7 +132,9 @@ let u_whichTexture;
 let u_GlobalRotateMatrix; // Global rotation matrix
 let u_ViewMatrix; // View matrix
 let u_ProjectionMatrix; // Projection matrix
-
+let u_lightPos; // Light position
+let u_cameraPos; // Camera position
+let u_lightOn;
 let camera;
 
 function setupWebGL() {
@@ -119,11 +173,28 @@ function connectVariablesToGLSL() {
     return;
   }
 
+  a_Normal = gl.getAttribLocation(gl.program, 'a_Normal');
+  if (a_Normal < 0) { 
+    console.log('Failed to get the storage location of a_Normal');
+    return;
+  }
+
+  u_cameraPos = gl.getUniformLocation(gl.program, 'u_cameraPos');
+  if (!u_cameraPos) {
+    console.log('Failed to get the storage location of u_cameraPos');
+    return;
+  }
 
   // Get the storage location of u_FragColor
   u_FragColor = gl.getUniformLocation(gl.program, 'u_FragColor');
   if (!u_FragColor) {
     console.log('Failed to get the storage location of u_FragColor');
+    return;
+  }
+
+  u_lightPos = gl.getUniformLocation(gl.program, 'u_lightPos');
+  if (!u_lightPos) {
+    console.log('Failed to get the storage location of u_lightPos');
     return;
   }
 
@@ -181,6 +252,12 @@ function connectVariablesToGLSL() {
   u_whichTexture = gl.getUniformLocation(gl.program, 'u_whichTexture');
   if(!u_whichTexture){
     console.log('Failed to get the storage location of u_whichTexture');
+    return false;
+  }
+
+  u_lightOn = gl.getUniformLocation(gl.program, 'u_lightOn');
+  if(!u_lightOn){
+    console.log('Failed to get the storage location of u_lightOn');
     return false;
   }
     
@@ -315,6 +392,9 @@ let g_globalHeadAngle = 0; // Default head angle is 0
 let g_headAnimation = true; // Default head angle is 0
 let g_legAnimation = true;
 let g_legStride = 0;
+let g_normalOn = false; // Default normal on is false
+let g_lightPos = [0,1,-2];
+let g_lightOn = true; // Default light on is true
 
 //Poke Animation
 const POKE_DURATION   = 5;          // seconds
@@ -331,6 +411,15 @@ let g_beakLowerY    = BEAK_CLOSED_Y; // current Y for lower beak
 function addActionForHtmlElement() {
 
   //Buttons Events
+  document.getElementById('normalOn').onclick = function(){g_normalOn = true;}; // Set the selected type to point
+  document.getElementById('normalOff').onclick = function(){g_normalOn = false;}; 
+  document.getElementById('lightOn').onclick = function(){g_lightOn = true;}; // Set the selected type to point
+  document.getElementById('lightOff').onclick = function(){g_lightOn = false;}; 
+
+
+  document.getElementById('lightSlideX').addEventListener('mousemove', function(ev) { if(ev.buttons == 1){g_lightPos[0] = this.value/100; renderAllShapes();}});
+  document.getElementById('lightSlideY').addEventListener('mousemove', function(ev) { if(ev.buttons == 1){g_lightPos[1] = this.value/100; renderAllShapes();}});
+  document.getElementById('lightSlideZ').addEventListener('mousemove', function(ev) { if(ev.buttons == 1){g_lightPos[2] = this.value/100; renderAllShapes();}});
   document.getElementById('armAnimationStart').onclick = function(){g_armAnimation = true;}; // Set the selected type to point
   document.getElementById('armAnimationEnd').onclick = function(){g_armAnimation = false;}; // Set the selected
   
@@ -542,6 +631,8 @@ function updateAnimationAngles(){
     g_lowerArmAngle  = RAISE_LOWER_ARM * k;
     g_beakLowerY     = BEAK_CLOSED_Y  + (BEAK_OPEN_Y - BEAK_CLOSED_Y) * k;
   }
+
+  g_lightPos[0] = Math.cos(g_seconds);
 }
 
 var g_eye =[0,0,3]; // The camera position (eye point)
@@ -567,6 +658,7 @@ function drawMap(){
       if(g_map[X][y] == 1){
         var cube = new Cube();
         cube.color = [0.0, 0.0, 0.0, 1.0]; // Red color
+         // Set the texture number to -3 for normal debug
         cube.textureNum = -1; // Set the texture number to 0
         cube.matrix.rotate(90, 0, 1, 0);
         cube.matrix.translate(X-10, -.60, y-4); // Translate the cube to the right
@@ -620,6 +712,7 @@ function drawIgloo() {
       const cube = new Cube();
       cube.textureNum = 3;   // snow texture
       cube.color      = [1, 1, 1, 1];
+      if(g_normalOn) cube.textureNum = -3;
       cube.matrix.setTranslate(centreX + x,
                                yPos,
                                centreZ + z + PUSH_Z);       // apply PUSH_Z
@@ -636,6 +729,7 @@ function drawIgloo() {
       const cube = new Cube();
       cube.textureNum = 3;
       cube.color      = [1, 1, 1, 1];
+      if(g_normalOn) cube.textureNum = -3;
       cube.matrix.setTranslate(centreX + x,
                                capY,
                                centreZ + z + PUSH_Z);       // apply PUSH_Z
@@ -658,27 +752,36 @@ function renderAllShapes(){
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
 
+  //pass the light position to the GLSL
+  gl.uniform3f(u_lightPos, g_lightPos[0], g_lightPos[1], g_lightPos[2]);
+
+  gl.uniform3f(u_cameraPos, camera.eye.elements[0], camera.eye.elements[1], camera.eye.elements[2]);
+
+  gl.uniform1i(u_lightOn, g_lightOn); // Set the light on/off
+
+
+  var light = new Cube();
+  light.color = [2, 2, 0, 1]; 
+  light.textureNum = -2;
+  light.matrix.translate(g_lightPos[0], g_lightPos[1], g_lightPos[2]);
+  light.matrix.scale(-0.1, -0.1, -0.1); // scale the light
+  light.matrix.translate(-.5, -.5, -.5); // move the origin to the center
+  light.render(); // Draw the light
+
+
   //drawMap(); // Draw the map
 
 
   //eggs
   const egg1 = new Sphere();
   egg1.color = [0.741, 0.678, 0.6, 1.0];   // pale‑blue ice ball
-  egg1.radius = 0.8;
-  egg1.latSeg = 20;                     // finer mesh if you like
-  egg1.lonSeg = 40;
-  egg1.matrix.setTranslate(1, -.4, 5);
+  if(g_normalOn) egg1.textureNum = -3;
+  //egg1.matrix.setTranslate(1, -.4, 5);
+  egg1.matrix.setTranslate(1, -.2, 1);
   egg1.matrix.scale(0.2, 0.2, 0.2);     // scale to egg shape
   egg1.render();
 
-  const egg2 = new Sphere();
-  egg2.color = [0.741, 0.678, 0.6, 1.0];   // pale‑blue ice ball
-  egg2.radius = 0.8;
-  egg2.latSeg = 20;                     // finer mesh if you like
-  egg2.lonSeg = 40;
-  egg2.matrix.setTranslate(0.6, -.4, 5);
-  egg2.matrix.scale(0.2, 0.2, 0.2);     // scale to egg shape
-  egg2.render();
+
 
 
   drawIgloo();
@@ -704,6 +807,7 @@ function renderAllShapes(){
   var sky = new Cube();
   sky.color = [0.0, 0.0, 1.0, .8]; // blue color
   sky.textureNum = -2; // Set the texture number to 0
+  if(g_normalOn) sky.textureNum = -3;
   sky.matrix.scale(50,50,50);
   sky.matrix.translate(-.5, -.5, -0.5); // Translate the cube to the right
   sky.render();
@@ -1099,7 +1203,9 @@ function drawPenguin(px, py, pz, opts = {}) {
   
   // draw the actual cube
   const head = new Cube();
-  head.color=[0,0,0,1]; head.textureNum=-2;
+  head.color=[0,0,0,1]; 
+  head.textureNum=-2;
+  if(g_normalOn) head.textureNum = -3;
   head.matrix = new Matrix4(headBase);
   head.matrix.translate(-0.2, 0, -0.2);      // move pivot back to corner
   head.matrix.scale(0.4, 0.35, 0.4);         // scale only the cube
@@ -1110,7 +1216,9 @@ function drawPenguin(px, py, pz, opts = {}) {
   // ─── BEAK upper / tongue / lower ───
   const makeBeakPiece = (color, tx, ty, tz, sx, sy, sz) => {
     const c = new Cube();
-    c.color = color; c.textureNum = -2;
+    c.color = color; 
+    c.textureNum = -2;
+    if(g_normalOn) c.textureNum = -3;
     c.matrix = new Matrix4(headFrame);
     c.matrix.translate(tx, ty, tz).scale(sx, sy, sz);
     c.render();
@@ -1122,13 +1230,17 @@ function drawPenguin(px, py, pz, opts = {}) {
   // ─── EYES ───
   const makeEye = (baseTx) => {
     const sclera = new Cube();
-    sclera.color=[1,1,1,1]; sclera.textureNum=-2;
+    sclera.color=[1,1,1,1]; 
+    sclera.textureNum=-2;
+    if(g_normalOn) sclera.textureNum = -3;
     sclera.matrix = new Matrix4(headFrame);
     sclera.matrix.translate(baseTx, .2, -.22).scale(0.1,0.1,0.1);
     sclera.render();
 
     const pupil = new Cube();
-    pupil.color=[0,0,0,1]; pupil.textureNum=-2;
+    pupil.color=[0,0,0,1]; 
+    pupil.textureNum=-2;
+    if(g_normalOn) pupil.textureNum = -3;
     pupil.matrix = new Matrix4(sclera.matrix);
     pupil.matrix.translate(.02,.02,-.0011).scale(0.5,0.6,1);
     pupil.render();
@@ -1138,19 +1250,25 @@ function drawPenguin(px, py, pz, opts = {}) {
 
   // ────────── BODY & BELLY ──────────
   const body = new Cube();
-  body.color=[0,0,0,1]; body.textureNum=-2;
+  body.color=[0,0,0,1]; 
+  body.textureNum=-2;
+  if(g_normalOn) body.textureNum = -3;
   body.matrix = new Matrix4(root);
   body.matrix.translate(-0.25,-0.5,0).scale(0.5,1,0.5);
   body.render();
 
   const belly = new Cube();
-  belly.color=[1,1,1,1]; belly.textureNum=-2;
+  belly.color=[1,1,1,1];
+  belly.textureNum=-2;
+  if(g_normalOn) belly.textureNum = -3;
   belly.matrix = new Matrix4(root);
   belly.matrix.translate(-0.16,-0.44,-.01).scale(0.33,0.9,0.5);
   belly.render();
 
   const chestYellow = new Cube();
-  chestYellow.color=[1,1,0.8,1]; chestYellow.textureNum=-2;
+  chestYellow.color=[1,1,0.8,1];
+  chestYellow.textureNum=-2;
+  if(g_normalOn) chestYellow.textureNum = -3; 
   chestYellow.matrix = new Matrix4(root);
   chestYellow.matrix.translate(-0.16, .301,-.011).scale(0.33,0.2,0.5);
   chestYellow.render();
@@ -1164,7 +1282,9 @@ function drawPenguin(px, py, pz, opts = {}) {
     const sign = isLeft ? 1 : -1;
     // Upper
     const upper = new Cube();
-    upper.color=[0,0,0,1]; upper.textureNum=-2;
+    upper.color=[0,0,0,1];  
+    upper.textureNum=-2;
+    if(g_normalOn) upper.textureNum = -3;
     upper.matrix = new Matrix4(root);
     upper.matrix.translate(sign*0.25, .45, isLeft? .5 : 0)
                 .rotate(180, isLeft?180:0,0,1)
@@ -1174,7 +1294,9 @@ function drawPenguin(px, py, pz, opts = {}) {
 
     // White underside
     const wUpper = new Cube();
-    wUpper.color=[1,1,1,1]; wUpper.textureNum=-2;
+    wUpper.color=[1,1,1,1]; 
+    wUpper.textureNum=-2;
+    if(g_normalOn) wUpper.textureNum = -3;
     wUpper.matrix = new Matrix4(root);
     wUpper.matrix.translate(sign*0.24,.45,isLeft?.4:.15)
                 .rotate(180, isLeft?180:0,0,1)
@@ -1189,7 +1311,9 @@ function drawPenguin(px, py, pz, opts = {}) {
                .rotate(-wingAngle,0,0,1);
 
     const lower = new Cube();
-    lower.color=[0,0,0,1]; lower.textureNum=-2;
+    lower.color=[0,0,0,1]; 
+    lower.textureNum=-2;
+    if(g_normalOn) lower.textureNum = -3;
     lower.matrix = new Matrix4(elbowFrame);
     lower.matrix.translate(ARM_THICK*0.5, ARM_LEN, 0)
                  .rotate(lowerWingAngle,0,0,1)
@@ -1198,7 +1322,9 @@ function drawPenguin(px, py, pz, opts = {}) {
     lower.render();
 
     const wLower = new Cube();
-    wLower.color=[1,1,1,1]; wLower.textureNum=-2;
+    wLower.color=[1,1,1,1];
+    wLower.textureNum=-2;
+    if(g_normalOn) wLower.textureNum = -3;
     wLower.matrix = new Matrix4(lower.matrix);
     wLower.matrix.translate(0,0,0.7).scale(1,1,0.3);
     //wLower.render();
@@ -1209,7 +1335,9 @@ function drawPenguin(px, py, pz, opts = {}) {
   // ────────── FEET ──────────
   const makeFoot = (tx) => {
     const foot = new Cube();
-    foot.color=[1,0.5,0,1]; foot.textureNum=-2;
+    foot.color=[1,0.5,0,1]; 
+    foot.textureNum=-2;
+    if(g_normalOn) foot.textureNum = -3;
     foot.matrix = new Matrix4(root);
     foot.matrix.translate(tx,-.57,-.08)
                 .rotate(tx>0 ? 5 : -5,0,1,0)
