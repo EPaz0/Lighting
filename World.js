@@ -117,6 +117,8 @@ let u_lightOn;
 let camera;
 let u_lightColor;            // uniform location
 let g_lightColor = [1,1,1];  // default white
+let g_lightAnimate = true;
+
 
 function setupWebGL() {
   // Retrieve <canvas> element
@@ -379,7 +381,7 @@ let g_headAnimation = true; // Default head angle is 0
 let g_legAnimation = true;
 let g_legStride = 0;
 let g_normalOn = false; // Default normal on is false
-let g_lightPos = [0,1,-2];
+let g_lightPos = [0, 1.2, -.5];
 let g_lightOn = true; // Default light on is true
 
 //Poke Animation
@@ -401,7 +403,13 @@ function addActionForHtmlElement() {
   document.getElementById('normalOff').onclick = function(){g_normalOn = false;}; 
   document.getElementById('lightOn').onclick = function(){g_lightOn = true;}; // Set the selected type to point
   document.getElementById('lightOff').onclick = function(){g_lightOn = false;}; 
-
+  
+  document.getElementById('toggleLightAnim').onclick = () => {
+    g_lightAnimate = !g_lightAnimate;
+    document.getElementById('toggleLightAnim').textContent =
+      g_lightAnimate ? 'Stop Light X Animation'
+                    : 'Start Light X Animation';
+  };
   // R‐slider
   document.getElementById('lightR').addEventListener('input', e => {
     g_lightColor[0] = e.target.value / 100;
@@ -636,7 +644,9 @@ function updateAnimationAngles(){
     g_beakLowerY     = BEAK_CLOSED_Y  + (BEAK_OPEN_Y - BEAK_CLOSED_Y) * k;
   }
 
-  g_lightPos[0] = Math.cos(g_seconds);
+   if (g_lightAnimate) {
+    g_lightPos[0] = Math.cos(g_seconds);
+  }
 }
 
 var g_eye =[0,0,3]; // The camera position (eye point)
@@ -664,6 +674,7 @@ function drawMap(){
         cube.color = [0.0, 0.0, 0.0, 1.0]; // Red color
          // Set the texture number to -3 for normal debug
         cube.textureNum = -1; // Set the texture number to 0
+        if(g_normalOn) cube.textureNum = -3;
         cube.matrix.rotate(90, 0, 1, 0);
         cube.matrix.translate(X-10, -.60, y-4); // Translate the cube to the right
        // cube.matrix.scale(1, 1, 1); // Rotate the cube by 45 degrees around the z-axis
@@ -769,7 +780,7 @@ function renderAllShapes(){
   light.textureNum = -2;
   light.matrix.translate(g_lightPos[0], g_lightPos[1], g_lightPos[2]);
   light.matrix.scale(-0.1, -0.1, -0.1); // scale the light
-  light.matrix.translate(-.5, -.5, -.5); // move the origin to the center
+  //light.matrix.translate(1, -.2, 1); // move the origin to the center
   light.render(); // Draw the light
 
 
@@ -793,6 +804,7 @@ function renderAllShapes(){
   var jp = new Cube();
   jp.color = [0.0, .5, 0.0, 1.0]; // Red color
   jp.textureNum = 2; // Set the texture number to 0
+  if(g_normalOn) jp.textureNum = -3;
   jp.matrix.setTranslate(.1, -0.6, 6); // Translate the cube to the right
   jp.matrix.scale(1, 1, 1); // Rotate the cube by 45 degrees around the z-axis
   
@@ -802,6 +814,7 @@ function renderAllShapes(){
   var floor = new Cube();
   floor.color = [0.0, .5, 0.0, 1.0]; // Red color
   floor.textureNum = 1; // Set the texture number to 0
+  if(g_normalOn) floor.textureNum = -3;
   floor.matrix.setTranslate(0, -0.60, 0); // Translate the cube to the right
   floor.matrix.scale(32, 0, 32); // Rotate the cube by 45 degrees around the z-axis
   floor.matrix.translate(-.5, 0, -.5); // Rotate the cube by 45 degrees around the z-axis
