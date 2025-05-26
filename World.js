@@ -51,70 +51,49 @@ var FSHADER_SOURCE =`
   varying vec4 v_VertPos; // Vertex position in world coordinates
   uniform vec3 u_cameraPos; // Camera position
   uniform bool u_lightOn; // Light on/off switch
+  uniform vec3 u_lightColor;
 
   void main() {
-      if(u_whichTexture == -3){
-        gl_FragColor = vec4((v_Normal + 1.0)/2.0,1.0); // Use Normal Debug Color
-      }else if(u_whichTexture == -2){
-        gl_FragColor = u_FragColor;               //Use Color 
-      
-      } else if(u_whichTexture == -1){
-        gl_FragColor = vec4(v_UV, 1.0, 1.0);              //Use UV Debug Color 
-      
-      }else if(u_whichTexture == 0){
-        gl_FragColor = texture2D(u_Sampler0, v_UV); //Use Texture 0
-      
-      }else if(u_whichTexture == 1){
-        gl_FragColor = texture2D(u_Sampler1, v_UV); //Use Texture 1
-      }else if(u_whichTexture == 2){
-        gl_FragColor = texture2D(u_Sampler2, v_UV); //Use Texture 2
-      }else if(u_whichTexture == 3){
-        gl_FragColor = texture2D(u_Sampler3, v_UV); //Use Texture 3
-      }  else{
+  // 1) pick your un-lit base color
+  vec4 baseColor;
+  if(u_whichTexture == -3) {
+    baseColor = vec4((v_Normal + 1.0) * 0.5, 1.0);
+  } else if(u_whichTexture == -2) {
+    baseColor = u_FragColor;
+  } else if(u_whichTexture == -1) {
+    baseColor = vec4(v_UV, 1.0, 1.0);
+  } else if(u_whichTexture == 0) {
+    baseColor = texture2D(u_Sampler0, v_UV);
+  } else if(u_whichTexture == 1) {
+    baseColor = texture2D(u_Sampler1, v_UV);
+  } else if(u_whichTexture == 2) {
+    baseColor = texture2D(u_Sampler2, v_UV);
+  } else if(u_whichTexture == 3) {
+    baseColor = texture2D(u_Sampler3, v_UV);
+  } else {
+    baseColor = vec4(1.0, 0.2, 0.2, 1.0);
+  }
 
-      
-        gl_FragColor = vec4(1,.2,.2,1);             // Error put redish
-      }
+  // 2) compute your per-pixel lighting factors
+  vec3  L       = normalize(u_lightPos - vec3(v_VertPos));
+  vec3  N       = normalize(v_Normal);
+  float nDotL   = max(dot(N, L), 0.0);
+  vec3  R       = reflect(-L, N);
+  vec3  E       = normalize(u_cameraPos - vec3(v_VertPos));
+  float specPow = pow(max(dot(E, R), 0.0), 10.0);
 
-      vec3 lightVector = u_lightPos - vec3(v_VertPos); // Vector from light to vertex
-      float r = length(lightVector); // Distance from light to vertex
+  // 3) now use u_lightColor to tint each component
+  vec3 ambient  = baseColor.rgb * 0.3   * u_lightColor;
+  vec3 diffuse  = baseColor.rgb * nDotL * 0.7   * u_lightColor;
+  vec3 specular = u_lightColor        * specPow;
 
-      // if(r < 1.0){
-      //   gl_FragColor = vec4(1,0,0,1); // If the distance is negative, set color to black
-      // }else if(r < 2.0){
-      //   gl_FragColor = vec4(0,1,0,1); // If the distance is negative, set color to black
-      // }
-    // gl_FragColor = vec4(vec3(gl_FragColor)/(r*r), 1); // Apply lighting effect
-    
-    //N dot L
-    vec3 L = normalize(lightVector); // Normalize the light vector
-    vec3 N = normalize(v_Normal); // Normalize the normal vector
-    float nDotL = max(dot(N, L), 0.0); // Calculate the dot product between normal and light vector
-    
-    
-
-    //reflection
-    vec3 R = reflect(-L, N); // Calculate the reflection vector
-
-    //eye
-    vec3 E = normalize(u_cameraPos-vec3(v_VertPos)); // Calculate the eye vector
-
-    //Specular
-    float specular = pow(max(dot(E, R), 0.0), 10.0); // Calculate the specular component
-
-
-    vec3 diffuse = vec3(gl_FragColor) * nDotL * 0.7; // Get the diffuse color from the fragment color
-    vec3 ambient = vec3(gl_FragColor)* 0.3;
-    if(u_lightOn)
-    {
-      if(u_whichTexture == 0){
-        gl_FragColor = vec4(specular + diffuse + ambient, 1.0); // Use Texture 0
-      }else{
-        gl_FragColor = vec4(diffuse + ambient, 1.0); // Combine diffuse and ambient light
-      }
-    }
-   // gl_FragColor = vec4(specular + diffuse + ambient, 1.0); // Combine diffuse and ambient light
-  }`
+  // 4) choose final output
+  if(u_lightOn) {
+    gl_FragColor = vec4(ambient + diffuse + specular, baseColor.a);
+  } else {
+    gl_FragColor = baseColor;
+  }
+}`
 
   //Global variables
 let canvas;
@@ -136,6 +115,8 @@ let u_lightPos; // Light position
 let u_cameraPos; // Camera position
 let u_lightOn;
 let camera;
+let u_lightColor;            // uniform location
+let g_lightColor = [1,1,1];  // default white
 
 function setupWebGL() {
   // Retrieve <canvas> element
@@ -260,7 +241,12 @@ function connectVariablesToGLSL() {
     console.log('Failed to get the storage location of u_lightOn');
     return false;
   }
-    
+  u_lightColor = gl.getUniformLocation(gl.program, 'u_lightColor');
+  if(!u_lightColor){
+    console.log('Failed to get the storage location of u_lightColor');
+    return false;
+  }
+
   //set an intital value for this matrix to identity
   var identityM = new Matrix4(); // Create a matrix object
   gl.uniformMatrix4fv(u_ModelMatrix, false, identityM.elements); // Pass the matrix to u_ModelMatrix attribute
@@ -416,7 +402,25 @@ function addActionForHtmlElement() {
   document.getElementById('lightOn').onclick = function(){g_lightOn = true;}; // Set the selected type to point
   document.getElementById('lightOff').onclick = function(){g_lightOn = false;}; 
 
-
+  // R‐slider
+  document.getElementById('lightR').addEventListener('input', e => {
+    g_lightColor[0] = e.target.value / 100;
+    gl.uniform3f(u_lightColor, ...g_lightColor);
+    renderAllShapes();
+  });
+  // G‐slider
+  document.getElementById('lightG').addEventListener('input', e => {
+    g_lightColor[1] = e.target.value / 100;
+    gl.uniform3f(u_lightColor, ...g_lightColor);
+    renderAllShapes();
+  });
+  // B‐slider
+  document.getElementById('lightB').addEventListener('input', e => {
+    g_lightColor[2] = e.target.value / 100;
+    gl.uniform3f(u_lightColor, ...g_lightColor);
+    renderAllShapes();
+  });
+  
   document.getElementById('lightSlideX').addEventListener('mousemove', function(ev) { if(ev.buttons == 1){g_lightPos[0] = this.value/100; renderAllShapes();}});
   document.getElementById('lightSlideY').addEventListener('mousemove', function(ev) { if(ev.buttons == 1){g_lightPos[1] = this.value/100; renderAllShapes();}});
   document.getElementById('lightSlideZ').addEventListener('mousemove', function(ev) { if(ev.buttons == 1){g_lightPos[2] = this.value/100; renderAllShapes();}});
@@ -758,7 +762,7 @@ function renderAllShapes(){
   gl.uniform3f(u_cameraPos, camera.eye.elements[0], camera.eye.elements[1], camera.eye.elements[2]);
 
   gl.uniform1i(u_lightOn, g_lightOn); // Set the light on/off
-
+  gl.uniform3f(u_lightColor, ...g_lightColor);
 
   var light = new Cube();
   light.color = [2, 2, 0, 1]; 
